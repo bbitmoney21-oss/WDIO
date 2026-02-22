@@ -1,0 +1,26 @@
+{
+  "name": "wbdio_project1",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "wdio": "wdio run ./wdio.conf.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@wdio/allure-reporter": "^9.24.0",
+    "@wdio/cli": "^9.24.0",
+    "@wdio/local-runner": "^9.24.0",
+    "@wdio/mocha-framework": "^9.24.0",
+    "@wdio/spec-reporter": "^9.24.0",
+    "wdio-zafira-listener-service": "^1.0.5"
+  },
+  "dependencies": {
+    "allure": "^3.1.0",
+    "git": "^0.1.5"
+  }
+}
