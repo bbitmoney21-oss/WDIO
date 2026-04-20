@@ -25,14 +25,25 @@ router.post('/handle', async (req, res, next) => {
 
     return res.json(payload);
   } catch (error) {
-    if (error.statusCode && error.statusCode < 500) {
-      return res.status(error.statusCode).json(buildPayload('unknown', error.message, { tenant_id: req.tenant?.id || null }));
-    }
-
     if (error.statusCode === 429) {
       return res.status(429).json({
-        error: 'Usage limit exceeded. Upgrade plan.',
+        error: 'You have reached your plan limit. Upgrade to continue.',
+        plan: req.tenant?.plan || null,
+        monthly_price: req.tenant?.price || null,
       });
+    }
+
+    if (error.code === 'PLAN_RESTRICTION' || error.statusCode === 403) {
+      return res.status(403).json({
+        error: 'Feature not available in your plan. Upgrade required.',
+        detail: error.message,
+        plan: req.tenant?.plan || null,
+        monthly_price: req.tenant?.price || null,
+      });
+    }
+
+    if (error.statusCode && error.statusCode < 500) {
+      return res.status(error.statusCode).json(buildPayload('unknown', error.message, { tenant_id: req.tenant?.id || null }));
     }
 
     return next(error);

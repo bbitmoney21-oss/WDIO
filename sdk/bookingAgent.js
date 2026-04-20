@@ -42,12 +42,19 @@ async function bookOrOrder(input, context = {}) {
   if (!response.ok) {
     const error = new Error(json.error || json.response || 'Booking agent request failed.');
     error.payload = json;
+    // Attach plan info to the error so callers can display upgrade prompts
+    error.plan = json.plan || null;
+    error.monthly_price = json.monthly_price || null;
     throw error;
   }
 
   if (json?.data?.usage?.warning) {
     json.sdk_warning = json.data.usage.warning;
   }
+
+  // Surface plan and price at the top level for easy SDK consumer access
+  json.plan = json.plan || json?.data?.usage?.plan || null;
+  json.price = json.monthly_price ?? json?.data?.usage?.monthly_price ?? null;
 
   return json;
 }

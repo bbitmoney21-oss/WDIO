@@ -45,14 +45,14 @@ function assertWithinPlanLimits(tenant) {
 
   if (usage.ai_requests_count >= planConfig.ai_requests_monthly) {
     usage.overage_flag = true;
-    const error = new Error('Usage limit exceeded. Upgrade plan.');
+    const error = new Error('You have reached your plan limit. Upgrade to continue.');
     error.statusCode = 429;
     throw error;
   }
 
   if (totalExecutions >= planConfig.executions_monthly) {
     usage.overage_flag = true;
-    const error = new Error('Usage limit exceeded. Upgrade plan.');
+    const error = new Error('You have reached your plan limit. Upgrade to continue.');
     error.statusCode = 429;
     throw error;
   }
@@ -97,11 +97,12 @@ function buildUsageSummary(tenant) {
 
   const warning =
     (aiRemaining !== null && aiRemaining <= 5) || (executionRemaining !== null && executionRemaining <= 5)
-      ? 'You are near your plan limit.'
+      ? 'You have reached your plan limit. Upgrade to continue.'
       : null;
 
   return {
     plan: tenant.plan,
+    monthly_price: planConfig.monthly_price ?? null,
     usage_limit: {
       ai_requests_monthly: Number.isFinite(planConfig.ai_requests_monthly)
         ? planConfig.ai_requests_monthly

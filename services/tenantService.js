@@ -1,23 +1,56 @@
 const crypto = require('crypto');
+const { getBusinessHours } = require('./businessHoursService');
 
 const PLAN_LIMITS = {
-  free: {
-    ai_requests_monthly: 50,
-    executions_monthly: 20,
-    integrationsEnabled: false,
-    priority: 'standard',
-  },
-  pro: {
-    ai_requests_monthly: 2000,
-    executions_monthly: 1000,
+  // --- Primary plans ---
+  restaurant: {
+    monthly_price: 199,
+    ai_requests_monthly: 5000,
+    executions_monthly: 2000,
     integrationsEnabled: true,
     priority: 'standard',
+    allowed_intents: ['restaurant_order'],
   },
-  enterprise: {
+  clinic: {
+    monthly_price: 299,
+    ai_requests_monthly: 5000,
+    executions_monthly: 2000,
+    integrationsEnabled: true,
+    priority: 'standard',
+    allowed_intents: ['clinic_booking'],
+  },
+  custom: {
+    monthly_price: 499,
     ai_requests_monthly: Number.POSITIVE_INFINITY,
     executions_monthly: Number.POSITIVE_INFINITY,
     integrationsEnabled: true,
     priority: 'priority',
+    allowed_intents: ['restaurant_order', 'clinic_booking'],
+  },
+  // --- Legacy aliases (kept for backward compatibility) ---
+  free: {
+    monthly_price: 0,
+    ai_requests_monthly: 50,
+    executions_monthly: 20,
+    integrationsEnabled: false,
+    priority: 'standard',
+    allowed_intents: ['restaurant_order', 'clinic_booking'],
+  },
+  pro: {
+    monthly_price: 299,
+    ai_requests_monthly: 2000,
+    executions_monthly: 1000,
+    integrationsEnabled: true,
+    priority: 'standard',
+    allowed_intents: ['restaurant_order', 'clinic_booking'],
+  },
+  enterprise: {
+    monthly_price: 499,
+    ai_requests_monthly: Number.POSITIVE_INFINITY,
+    executions_monthly: Number.POSITIVE_INFINITY,
+    integrationsEnabled: true,
+    priority: 'priority',
+    allowed_intents: ['restaurant_order', 'clinic_booking'],
   },
 };
 
@@ -28,7 +61,11 @@ const tenantStore = new Map([
       id: 'tenant_resto_demo',
       name: 'Demo Restaurant',
       type: 'restaurant',
-      plan: 'free',
+      plan: 'restaurant',
+      price: 199,
+      usage_limit: { ai_requests_monthly: 5000, executions_monthly: 2000 },
+      // business_hours can be overridden here; null means use default for type
+      business_hours: null,
       api_key: 'demo-resto-free-key',
       created_at: new Date().toISOString(),
     },
@@ -39,7 +76,10 @@ const tenantStore = new Map([
       id: 'tenant_clinic_demo',
       name: 'Demo Clinic',
       type: 'clinic',
-      plan: 'pro',
+      plan: 'clinic',
+      price: 299,
+      usage_limit: { ai_requests_monthly: 5000, executions_monthly: 2000 },
+      business_hours: null,
       api_key: 'demo-clinic-pro-key',
       created_at: new Date().toISOString(),
     },
@@ -53,15 +93,37 @@ function createServiceError(message, statusCode = 500) {
 }
 
 function getPlanConfig(plan) {
-  return PLAN_LIMITS[plan] || PLAN_LIMITS.free;
+  return PLAN_LIMITS[plan] || PLAN_LIMITS.restaurant;
 }
 
-function createTenant({ name, type, plan = 'free' }) {
+function defaultPlanForType(type) {
+  if (type === 'clinic') return 'clinic';
+  return 'restaurant';
+}
+
+function createTenant({ name, type, plan, business_hours }) {
+  const resolvedPlan = plan || defaultPlanForType(type);
+  const planConfig = getPlanConfig(resolvedPlan);
+
+  // Build a minimal tenant stub so getBusinessHours can derive the default
+  const stub = { type, plan: resolvedPlan, business_hours: business_hours || null };
+  const resolvedHours = business_hours || null; // store null → service derives from type
+
   const tenant = {
     id: `tenant_${crypto.randomUUID()}`,
     name,
     type,
-    plan,
+    plan: resolvedPlan,
+    price: planConfig.monthly_price,
+    usage_limit: {
+      ai_requests_monthly: Number.isFinite(planConfig.ai_requests_monthly)
+        ? planConfig.ai_requests_monthly
+        : 'unlimited',
+      executions_monthly: Number.isFinite(planConfig.executions_monthly)
+        ? planConfig.executions_monthly
+        : 'unlimited',
+    },
+    business_hours: resolvedHours,
     api_key: `tenant_${crypto.randomUUID().replace(/-/g, '')}`,
     created_at: new Date().toISOString(),
   };
@@ -109,16 +171,29 @@ function upgradeTenantPlan(tenantId, plan) {
     throw createServiceError('Tenant not found', 404);
   }
 
+  const planConfig = getPlanConfig(plan);
   tenant.plan = plan;
+  tenant.price = planConfig.monthly_price;
+  tenant.usage_limit = {
+    ai_requests_monthly: Number.isFinite(planConfig.ai_requests_monthly)
+      ? planConfig.ai_requests_monthly
+      : 'unlimited',
+    executions_monthly: Number.isFinite(planConfig.executions_monthly)
+      ? planConfig.executions_monthly
+      : 'unlimited',
+  };
+
   return tenant;
 }
 
 module.exports = {
   createServiceError,
   createTenant,
+  defaultPlanForType,
   getPlanConfig,
   getTenantById,
   listTenants,
   resolveTenant,
   upgradeTenantPlan,
+  getBusinessHours,
 };

@@ -1,5 +1,5 @@
 const express = require('express');
-const { createTenant } = require('../services/tenantService');
+const { createTenant, defaultPlanForType, getPlanConfig } = require('../services/tenantService');
 
 const router = express.Router();
 
@@ -65,10 +65,12 @@ router.post('/start', (req, res) => {
     });
   }
 
+  const assignedPlan = defaultPlanForType(normalizedType);
+  const planConfig = getPlanConfig(assignedPlan);
   const tenant = createTenant({
     name: normalizedName,
     type: normalizedType,
-    plan: 'free',
+    plan: assignedPlan,
   });
   const dashboardLink = `/dashboard?tenant_id=${tenant.id}&api_key=${tenant.api_key}`;
   const sdkSnippet = `import { bookOrOrder } from "universal-booking-sdk";
@@ -126,7 +128,15 @@ bookOrOrder({
       name: tenant.name,
       type: tenant.type,
       plan: tenant.plan,
+      price: tenant.price,
+      usage_limit: tenant.usage_limit,
       api_key: tenant.api_key,
+    },
+    plan_info: {
+      plan: assignedPlan,
+      monthly_price: planConfig.monthly_price,
+      price_label: planConfig.monthly_price ? `$${planConfig.monthly_price}/mo` : 'Custom',
+      features: planConfig.allowed_intents,
     },
     sdk_snippet: sdkSnippet,
     dashboard_link: dashboardLink,

@@ -11,6 +11,7 @@ const publicRouter = require('./routes/public');
 const webRouter = require('./routes/web');
 const { authenticateTenant } = require('./middleware/authenticateTenant');
 const supportRouter = require('./routes/support');
+const leadRouter = require('./routes/lead');
 const { hasOpenAiConfig } = require('./services/aiAgent');
 const { hasSupabaseConfig } = require('./services/supabaseClient');
 
@@ -51,6 +52,7 @@ app.use('/api/public', publicRouter);
 app.use('/dashboard', authenticateTenant, dashboardRouter);
 app.use('/onboarding', onboardingRouter);
 app.use('/api/support', supportRouter);
+app.use('/api/lead', leadRouter);
 
 app.use((err, _req, res, _next) => {
   const statusCode = err.statusCode || 500;

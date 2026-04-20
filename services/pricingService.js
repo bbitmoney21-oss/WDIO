@@ -2,32 +2,31 @@ const { getSupabaseClient, hasSupabaseConfig, isMissingRelationError, isSchemaEr
 
 const DEFAULT_PRICING = [
   {
-    slug: 'starter',
-    name: 'Starter',
-    price_label: '$99/mo',
-    description: 'Very small businesses testing AI order or booking automation.',
+    slug: 'restaurant',
+    name: 'Restaurant Plan',
+    price_label: '$199/mo',
+    monthly_price: 199,
+    description: 'AI order taking, kitchen print integration, and basic messaging for restaurants.',
+    features: ['AI order taking', 'Kitchen print integration', 'Basic messaging'],
     sort_order: 1,
   },
   {
-    slug: 'growth',
-    name: 'Growth',
-    price_label: '$999/mo',
-    description: 'Production-ready AI handling for businesses replacing manual phone workflows.',
+    slug: 'clinic',
+    name: 'Clinic Plan',
+    price_label: '$299/mo',
+    monthly_price: 299,
+    description: 'Appointment booking, calendar integration, and email confirmation for clinics.',
+    features: ['Appointment booking', 'Calendar integration', 'Email confirmation'],
     sort_order: 2,
   },
   {
-    slug: 'pro-execution',
-    name: 'Pro Execution',
-    price_label: '$3,000/mo',
-    description: 'Advanced execution workflows, heavier usage, and priority support.',
+    slug: 'custom',
+    name: 'Custom Plan',
+    price_label: 'From $499/mo',
+    monthly_price: 499,
+    description: 'Multi-location, advanced workflows, and integrations beyond default features.',
+    features: ['Multi-location support', 'Advanced workflows', 'Custom integrations', 'All restaurant + clinic features'],
     sort_order: 3,
-  },
-  {
-    slug: 'enterprise',
-    name: 'Enterprise',
-    price_label: 'Custom',
-    description: 'Multi-location deployments, custom integrations, and dedicated onboarding.',
-    sort_order: 4,
   },
 ];
 
@@ -66,7 +65,9 @@ async function getPricing() {
       slug: tier.slug,
       name: tier.name,
       price_label: tier.price_label,
+      monthly_price: tier.monthly_price ?? null,
       description: tier.description,
+      features: tier.features ?? [],
       sort_order: tier.sort_order,
     }));
 
@@ -83,7 +84,9 @@ async function updatePricing(nextPricing) {
       slug: tier.slug,
       name: tier.name,
       price_label: tier.price_label,
+      monthly_price: tier.monthly_price ?? null,
       description: tier.description,
+      features: tier.features ?? [],
       sort_order: Number.isFinite(tier.sort_order) ? tier.sort_order : index + 1,
     }))
     .sort((a, b) => a.sort_order - b.sort_order);
