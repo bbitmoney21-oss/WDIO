@@ -17,6 +17,7 @@ Set these on Render or Railway:
 - `CORS_ORIGIN`
 - `CLINIC_ADMIN_EMAIL`
 - `BOOKING_AGENT_API_URL`
+- `PRICING_ADMIN_TOKEN`
 
 Do not commit real values.
 
@@ -113,3 +114,13 @@ After deployment confirm:
    - `{ "error": "Unauthorized tenant" }`
 4. Main site loads over HTTPS
 5. SDK calls the live production API URL
+
+## Dynamic pricing updates
+
+To update pricing without a redeploy:
+
+1. Set `PRICING_ADMIN_TOKEN` in the hosting environment.
+2. Call:
+   - `GET /api/public/pricing` to read current pricing
+   - `POST /api/admin/pricing` with header `x-admin-token`
+3. The landing page reads pricing at request time, so new values show on the next page load.

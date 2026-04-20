@@ -1,8 +1,16 @@
 const express = require('express');
+const { getPricing } = require('../services/pricingService');
 
 const router = express.Router();
 
-router.get('/', (_req, res) => {
+router.get('/', async (_req, res, next) => {
+  try {
+    const pricing = await getPricing();
+    const pricingCards = pricing
+      .map(
+        (tier) => `<div class="card"><strong>${tier.name}</strong><div class="price">${tier.price_label}</div><p>${tier.description}</p></div>`,
+      )
+      .join('');
   const html = `<!doctype html>
 <html lang="en">
   <head>
@@ -34,6 +42,7 @@ router.get('/', (_req, res) => {
       .card { background: var(--card); border: 1px solid rgba(23,23,23,0.08); border-radius: 20px; padding: 24px; box-shadow: 0 12px 30px rgba(0,0,0,0.05); }
       h2 { margin: 0 0 12px; font-size: 30px; }
       h3 { margin: 0 0 10px; font-size: 20px; }
+      .price { font: 700 22px/1.2 Arial, sans-serif; margin-bottom: 8px; color: var(--accent); }
       p, li { font: 400 16px/1.6 Arial, sans-serif; color: var(--muted); }
       ul { margin: 0; padding-left: 18px; }
       .pricing .card strong { display: block; font-size: 28px; margin-bottom: 10px; }
@@ -85,11 +94,7 @@ router.get('/', (_req, res) => {
 
       <section class="pricing" id="pricing">
         <h2>Pricing</h2>
-        <div class="grid">
-          <div class="card"><strong>Free</strong><p>50 AI requests/month, 20 orders or bookings, core API access.</p></div>
-          <div class="card"><strong>Pro</strong><p>2000 AI requests/month, 1000 orders or bookings, printer + email enabled.</p></div>
-          <div class="card"><strong>Enterprise</strong><p>Unlimited usage, priority processing, and custom integrations.</p></div>
-        </div>
+        <div class="grid" id="pricing-grid">${pricingCards}</div>
       </section>
 
       <section class="cta">
@@ -103,8 +108,11 @@ router.get('/', (_req, res) => {
   </body>
 </html>`;
 
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  return res.send(html);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(html);
+  } catch (error) {
+    return next(error);
+  }
 });
 
 module.exports = router;

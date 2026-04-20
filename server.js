@@ -2,10 +2,12 @@ require('dotenv').config();
 
 const express = require('express');
 const analyticsRouter = require('./routes/analytics');
+const adminRouter = require('./routes/admin');
 const agentRouter = require('./routes/agent');
 const billingRouter = require('./routes/billing');
 const dashboardRouter = require('./routes/dashboard');
 const onboardingRouter = require('./routes/onboarding');
+const publicRouter = require('./routes/public');
 const webRouter = require('./routes/web');
 const { authenticateTenant } = require('./middleware/authenticateTenant');
 const supportRouter = require('./routes/support');
@@ -41,9 +43,11 @@ app.get('/health', (_req, res) => {
 });
 
 app.use('/api/agent', authenticateTenant, agentRouter);
+app.use('/api/admin', adminRouter);
 app.use('/api/billing', authenticateTenant, billingRouter);
 app.use('/api/analytics', authenticateTenant, analyticsRouter);
 app.use('/api/onboarding', onboardingRouter);
+app.use('/api/public', publicRouter);
 app.use('/dashboard', authenticateTenant, dashboardRouter);
 app.use('/onboarding', onboardingRouter);
 app.use('/api/support', supportRouter);
