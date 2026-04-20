@@ -1,8 +1,10 @@
 const crypto = require('crypto');
 const express = require('express');
-const { handleAgentRequest } = require('../services/bookingAgent');
 const { getTenantById, getTenantByApiKey } = require('../services/tenantService');
 const { isWithinBusinessHours, getAfterHoursResponse } = require('../services/businessHoursService');
+const { getTenantKnowledge } = require('../services/knowledgeService');
+const { createRestaurantOrder } = require('../services/orderService');
+const { processVoiceTurn, clearCallState } = require('../services/voiceConversation');
 
 const router = express.Router();
 
@@ -38,11 +40,12 @@ function say(text) {
 }
 
 // Wraps optional inner content in a <Gather> block that captures speech.
-// action always defaults to the absolute URL derived from PUBLIC_URL.
+// language="en-IN" improves recognition of Indian-accented English callers.
 function gather({ action = null, prompt = null, timeout = 3 } = {}) {
   const resolvedAction = action || gatherActionUrl();
+  const lang  = process.env.VOICE_SPEECH_LANGUAGE || 'en-IN';
   const inner = prompt ? say(prompt) : '';
-  return `<Gather input="speech" action="${resolvedAction}" method="POST" speechTimeout="${timeout}" language="en-US">${inner}</Gather>`;
+  return `<Gather input="speech" action="${resolvedAction}" method="POST" speechTimeout="${timeout}" language="${lang}">${inner}</Gather>`;
 }
 
 function twiml(body) {
@@ -171,67 +174,56 @@ router.post('/gather', twilioAuth, async (req, res) => {
   const speechResult = (req.body?.SpeechResult || '').trim();
   const callSid      = req.body?.CallSid || 'voice-caller';
   console.log('[voice] gather callSid=%s speech=%s', callSid, speechResult || '(empty)');
-  const tenant       = resolveVoiceTenant();
 
+  const tenant = resolveVoiceTenant();
   if (!tenant) {
     return sendTwiML(res, say('Service not configured. Goodbye.') + '<Hangup/>');
   }
 
+  // No speech detected → prompt to repeat without advancing state
   if (!speechResult) {
     return sendTwiML(res,
-      say("Sorry, I didn't catch that — what would you like to order?") +
+      say("Sorry, I didn't catch that — could you repeat?") +
       gather(),
     );
   }
 
   try {
-    // Phase 4: route speech to existing AI backend (no logic rewrite)
-    const result = await handleAgentRequest({
-      tenant,
-      userId: callSid,   // use Twilio CallSid as a stable user identifier
-      message: speechResult,
-      mode: 'auto',
-    });
+    // Load Bhagibhavan knowledge (menu, combos, specials, spice levels)
+    const knowledge = await getTenantKnowledge(tenant.id, tenant.type).catch(() => null);
 
-    // Phase 7: business hours — closed response from agent layer
-    if (result.status === 'closed') {
-      return sendTwiML(res, say(toSpeech(result.response)) + '<Hangup/>');
+    // Run the stateful conversation engine
+    const { response, shouldHangUp, finalOrder } = await processVoiceTurn(callSid, speechResult, knowledge);
+
+    // Persist order to DB when customer confirms
+    if (finalOrder) {
+      try {
+        const orderResult = await createRestaurantOrder({
+          tenant,
+          userId:     callSid,
+          items:      finalOrder.items,
+          rawMessage: finalOrder.items.map((i) => `${i.quantity}x ${i.name}`).join(', '),
+        });
+        console.log('[voice] order persisted orderId=%s', orderResult.order_id);
+      } catch (err) {
+        console.error('[voice] order persistence failed:', err.message);
+        // Non-fatal — call still ends gracefully
+      }
+      clearCallState(callSid);
     }
 
-    // Phase 4: scheduled (after-hours + scheduling intent)
-    if (result.status === 'scheduled') {
+    if (shouldHangUp) {
       return sendTwiML(res,
-        say(toSpeech(result.response)) +
-        gather({ prompt: 'Can I get you anything else?' }),
-      );
-    }
-
-    // Phase 5 & 6: speak AI response, loop back for next input
-    const spokenResponse = toSpeech(result.response);
-    return sendTwiML(res,
-      say(spokenResponse) +
-      gather({ prompt: 'Can I get you anything else?' }),
-    );
-
-  } catch (err) {
-    console.error('[voice] handleAgentRequest error:', err.message);
-
-    // Phase 8: plan restriction
-    if (err.statusCode === 403 || err.code === 'PLAN_RESTRICTION') {
-      return sendTwiML(res,
-        say('This feature is not available on your current plan. Please contact us to upgrade.') +
-        gather({ prompt: 'Is there anything else I can help you with?' }),
-      );
-    }
-
-    // Phase 8: usage limit
-    if (err.statusCode === 429) {
-      return sendTwiML(res,
-        say('You have reached your usage limit for this month. Please upgrade your plan to continue.') +
+        say(toSpeech(response)) +
+        '<Pause length="1"/>' +
         '<Hangup/>',
       );
     }
 
+    return sendTwiML(res, say(toSpeech(response)) + gather());
+
+  } catch (err) {
+    console.error('[voice] gather error callSid=%s:', callSid, err.message);
     return sendTwiML(res,
       say("Sorry about that — could you say that again?") +
       gather(),
@@ -256,6 +248,10 @@ router.post('/fallback', twilioAuth, (req, res) => {
 router.post('/status', (req, res) => {
   const { CallSid, CallStatus, CallDuration } = req.body || {};
   console.log('[voice] status callSid=%s status=%s duration=%s', CallSid, CallStatus, CallDuration);
+  // Clean up call state on any terminal status to prevent memory leaks
+  if (CallSid && ['completed', 'failed', 'busy', 'no-answer', 'canceled'].includes(CallStatus)) {
+    clearCallState(CallSid);
+  }
   return res.sendStatus(204);
 });
 
