@@ -293,13 +293,23 @@ async function classifyIntent(message, mode = 'auto') {
   }
 }
 
-async function extractRestaurantOrder(message) {
+// extractRestaurantOrder accepts an optional promptOverride injected by the
+// knowledge layer. When provided, the AI is given the full tenant menu and
+// is asked to return price / is_available per item.
+async function extractRestaurantOrder(message, promptOverride = null) {
   const sanitizedMessage = sanitizeMessage(message);
   const fallbackItems = extractRestaurantItemsByRules(sanitizedMessage);
 
   if (!hasOpenAiConfig()) {
     return { items: fallbackItems };
   }
+
+  const systemText = promptOverride || [
+    'Extract restaurant order items from the user message.',
+    'Return JSON only.',
+    'Use the schema exactly.',
+    'If the quantity is unknown, default to 1.',
+  ].join(' ');
 
   try {
     const response = await callOpenAiWithRetry((client) =>
@@ -309,17 +319,7 @@ async function extractRestaurantOrder(message) {
         input: [
           {
             role: 'system',
-            content: [
-              {
-                type: 'input_text',
-                text: [
-                  'Extract restaurant order items from the user message.',
-                  'Return JSON only.',
-                  'Use the schema exactly.',
-                  'If the quantity is unknown, default to 1.',
-                ].join(' '),
-              },
-            ],
+            content: [{ type: 'input_text', text: systemText }],
           },
           {
             role: 'user',
@@ -340,8 +340,11 @@ async function extractRestaurantOrder(message) {
                     type: 'object',
                     additionalProperties: false,
                     properties: {
-                      name: { type: 'string' },
-                      quantity: { type: 'number' },
+                      name:         { type: 'string' },
+                      quantity:     { type: 'number' },
+                      // populated when knowledge prompt is injected
+                      price:        { type: 'number' },
+                      is_available: { type: 'boolean' },
                     },
                     required: ['name', 'quantity'],
                   },
@@ -365,7 +368,10 @@ async function extractRestaurantOrder(message) {
   }
 }
 
-async function extractClinicBooking(message, userId) {
+// extractClinicBooking accepts an optional promptOverride injected by the
+// knowledge layer. When provided, the AI receives the clinic's service catalog
+// and maps the user's request to the closest matching service.
+async function extractClinicBooking(message, userId, promptOverride = null) {
   const sanitizedMessage = sanitizeMessage(message);
   const fallbackExtraction = extractClinicBookingByRules(sanitizedMessage, userId);
   const emailMatch = sanitizedMessage.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
@@ -377,6 +383,12 @@ async function extractClinicBooking(message, userId) {
     };
   }
 
+  const systemText = promptOverride || [
+    'Extract clinic booking details from the user message.',
+    'Return JSON only with patient_name, service_type, and time_preference.',
+    'If something is missing, return a helpful fallback value instead of null.',
+  ].join(' ');
+
   try {
     const response = await callOpenAiWithRetry((client) =>
       client.responses.create({
@@ -385,16 +397,7 @@ async function extractClinicBooking(message, userId) {
         input: [
           {
             role: 'system',
-            content: [
-              {
-                type: 'input_text',
-                text: [
-                  'Extract clinic booking details from the user message.',
-                  'Return JSON only with patient_name, service_type, and time_preference.',
-                  'If something is missing, return a helpful fallback value instead of null.',
-                ].join(' '),
-              },
-            ],
+            content: [{ type: 'input_text', text: systemText }],
           },
           {
             role: 'user',

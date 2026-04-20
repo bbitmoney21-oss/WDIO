@@ -1,5 +1,11 @@
 const express = require('express');
 const { getPricing, updatePricing, validatePricingPayload } = require('../services/pricingService');
+const {
+  getTenantKnowledge,
+  setTenantKnowledge,
+  clearKnowledgeCache,
+} = require('../services/knowledgeService');
+const { getTenantById } = require('../services/tenantService');
 
 const router = express.Router();
 
@@ -38,6 +44,37 @@ router.post('/pricing', requireAdminToken, async (req, res, next) => {
   } catch (error) {
     return next(error);
   }
+});
+
+// ─── Knowledge management ─────────────────────────────────────────────────────
+
+router.get('/knowledge/:tenantId', requireAdminToken, async (req, res, next) => {
+  try {
+    const tenant = getTenantById(req.params.tenantId);
+    const tenantType = tenant ? tenant.type : 'restaurant';
+    const knowledge = await getTenantKnowledge(req.params.tenantId, tenantType);
+    return res.json({ tenant_id: req.params.tenantId, knowledge });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post('/knowledge/:tenantId', requireAdminToken, (req, res) => {
+  const { knowledge } = req.body || {};
+
+  if (!knowledge || typeof knowledge !== 'object') {
+    return res.status(400).json({ error: '`knowledge` must be a non-empty object.' });
+  }
+
+  setTenantKnowledge(req.params.tenantId, knowledge);
+  clearKnowledgeCache(req.params.tenantId); // clear and re-set so cache is fresh
+  setTenantKnowledge(req.params.tenantId, knowledge);
+
+  return res.json({
+    message: 'Tenant knowledge updated',
+    tenant_id: req.params.tenantId,
+    knowledge,
+  });
 });
 
 module.exports = router;

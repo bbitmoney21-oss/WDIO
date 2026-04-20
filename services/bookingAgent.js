@@ -23,6 +23,13 @@ const {
   detectSchedulingIntent,
   getAfterHoursResponse,
 } = require('./businessHoursService');
+const {
+  getTenantKnowledge,
+  buildRestaurantSystemPrompt,
+  buildClinicSystemPrompt,
+  validateAndPriceItems,
+  normaliseClinicService,
+} = require('./knowledgeService');
 
 // ─── Response builder ────────────────────────────────────────────────────────
 
@@ -70,11 +77,42 @@ function assertPlanAllowsIntent(tenant, intent) {
 // ─── Execution flows ─────────────────────────────────────────────────────────
 
 async function executeRestaurantFlow({ tenant, userId, message, hoursInfo }) {
-  const extraction = await extractRestaurantOrder(message);
+  // Phase 3: fetch knowledge and build a menu-aware system prompt
+  const knowledge   = await getTenantKnowledge(tenant.id, tenant.type).catch(() => null);
+  const promptOverride = knowledge ? buildRestaurantSystemPrompt(knowledge) : null;
+
+  const extraction = await extractRestaurantOrder(message, promptOverride);
+
+  // Phase 4: validate extracted items against the menu; calculate totals
+  const { validItems, unavailableItems, total, menuConfigured } =
+    validateAndPriceItems(extraction.items, knowledge);
+
+  // Phase 6: all items unavailable — return menu-aware "not available" response
+  if (menuConfigured && validItems.length === 0 && unavailableItems.length > 0) {
+    const menuList = Array.isArray(knowledge.menu)
+      ? knowledge.menu.slice(0, 6).map((m) => m.name).join(', ')
+      : '';
+    const planConfig = getPlanConfig(tenant.plan);
+    return {
+      intent: 'restaurant_order',
+      execution_status: 'item_unavailable',
+      id: null,
+      status: 'open',
+      business_hours: hoursInfo ? hoursInfo.display : null,
+      timezone: hoursInfo ? hoursInfo.timezone : null,
+      plan: tenant.plan,
+      monthly_price: planConfig.monthly_price ?? null,
+      response: `Sorry, ${unavailableItems.join(', ')} ${unavailableItems.length === 1 ? 'is' : 'are'} not available. ${menuList ? `We serve: ${menuList}.` : 'Please check our menu.'}`,
+      data: { unavailable_items: unavailableItems, tenant_id: tenant.id, usage: buildUsageSummary(tenant) },
+    };
+  }
+
+  const itemsToOrder = validItems.length > 0 ? validItems : extraction.items;
+
   const orderResult = await createRestaurantOrder({
     tenant,
     userId,
-    items: extraction.items,
+    items: itemsToOrder,
     rawMessage: message,
   });
   const planConfig = getPlanConfig(tenant.plan);
@@ -85,7 +123,7 @@ async function executeRestaurantFlow({ tenant, userId, message, hoursInfo }) {
     try {
       printerResult = await sendToKitchenPrinter({
         order_id: orderResult.order_id,
-        items: extraction.items,
+        items: itemsToOrder,
         time: new Date().toISOString(),
         instructions: message,
       });
@@ -96,16 +134,26 @@ async function executeRestaurantFlow({ tenant, userId, message, hoursInfo }) {
 
   const usage = incrementExecutionUsage(tenant, 'restaurant_order');
 
+  // Build a rich response that includes pricing when menu is configured
+  const unavailableNote = unavailableItems.length > 0
+    ? ` (Note: ${unavailableItems.join(', ')} not available and was excluded.)`
+    : '';
+
+  const baseResponse = planConfig.integrationsEnabled
+    ? 'Order received and sent to kitchen printer'
+    : 'Order received. Upgrade your plan to enable kitchen printer execution.';
+
   return buildResponse({
     intent: 'restaurant_order',
     executionStatus: printerResult.status === 'queued' ? 'completed' : 'partial',
     id: orderResult.order_id,
-    response: planConfig.integrationsEnabled
-      ? 'Order received and sent to kitchen printer'
-      : 'Order received. Upgrade your plan to enable kitchen printer execution.',
+    response: `${baseResponse}${unavailableNote}`,
     data: {
       order_id: orderResult.order_id,
       details: orderResult.details,
+      items: itemsToOrder,
+      order_total: total !== null ? total : undefined,
+      unavailable_items: unavailableItems.length > 0 ? unavailableItems : undefined,
       printer: printerResult,
       stored: orderResult.stored,
       tenant_id: tenant.id,
@@ -119,12 +167,20 @@ async function executeRestaurantFlow({ tenant, userId, message, hoursInfo }) {
 }
 
 async function executeClinicFlow({ tenant, userId, message, hoursInfo }) {
-  const extraction = await extractClinicBooking(message, userId);
+  // Phase 3 & 5: fetch knowledge and inject service catalog into prompt
+  const knowledge      = await getTenantKnowledge(tenant.id, tenant.type).catch(() => null);
+  const promptOverride = knowledge ? buildClinicSystemPrompt(knowledge) : null;
+
+  const extraction = await extractClinicBooking(message, userId, promptOverride);
+
+  // Phase 5: normalise service type against known services
+  const normalisedService = normaliseClinicService(extraction.service_type, knowledge);
+
   const appointmentResult = await createClinicAppointment({
     tenant,
     userId,
     patientName: extraction.patient_name,
-    serviceType: extraction.service_type,
+    serviceType: normalisedService,
     timePreference: extraction.time_preference,
     rawMessage: message,
   });
@@ -192,6 +248,7 @@ async function executeClinicFlow({ tenant, userId, message, hoursInfo }) {
       : 'Appointment booked. Upgrade your plan to enable email and calendar confirmations.',
     data: {
       appointment_id: appointmentResult.appointment_id,
+      service_type:   normalisedService,
       details: appointmentResult.details,
       calendar: calendarResult,
       email: { patient: patientEmailResult, admin: adminEmailResult },
