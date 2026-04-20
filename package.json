@@ -1,8 +1,12 @@
 {
-  "name": "wbdio_project1",
+  "name": "universal-booking-sdk",
   "version": "1.0.0",
-  "description": "WDIO project with customer support AI backend",
+  "description": "Universal Booking and Order Execution SDK with backend service",
   "main": "server.js",
+  "exports": {
+    ".": "./server.js",
+    "./sdk": "./sdk/bookingAgent.js"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "wdio": "wdio run ./wdio.conf.js",
