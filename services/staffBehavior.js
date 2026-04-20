@@ -180,31 +180,53 @@ function memoryGuidance(memory, intent) {
 
 function buildRestaurantStaffPrompt(tenant, knowledge, ctx, state, memory) {
   const venueName = tenant.name || 'the restaurant';
-  const menu      = Array.isArray(knowledge?.menu) ? knowledge.menu : [];
+  const menu      = Array.isArray(knowledge?.menu)   ? knowledge.menu   : [];
+  const combos    = Array.isArray(knowledge?.combos) ? knowledge.combos : [];
+  const specials  = Array.isArray(knowledge?.specials) ? knowledge.specials : [];
 
   const menuSummary = menu.length
     ? menu.map((m) => `${m.name} ($${Number(m.price).toFixed(2)}) [${m.category || 'food'}]`).join(', ')
     : 'Menu not configured.';
 
-  const drinks   = menu.filter((m) => m.category === 'drinks').map((m) => m.name);
+  const comboSummary = combos.length
+    ? combos.map((c) => `${c.name} ($${Number(c.price).toFixed(2)}): ${c.description}`).join(' | ')
+    : '';
+
+  const specialsSummary = specials.length
+    ? specials.map((s) => `${s.name}: ${s.description}${s.price ? ` ($${Number(s.price).toFixed(2)})` : ''}`).join(' | ')
+    : '';
+
+  const drinks    = menu.filter((m) => m.category === 'drinks').map((m) => m.name);
   const drinkHint = drinks.length ? drinks.slice(0, 2).join(' or ') : 'a refreshing drink';
 
   const itemsSummary = Array.isArray(ctx.items) && ctx.items.length
-    ? ctx.items.map((i) => `${i.quantity > 1 ? i.quantity + 'x ' : ''}${i.name}${i.line_total ? ` ($${Number(i.line_total).toFixed(2)})` : ''}`).join(', ')
+    ? ctx.items.map((i) => `${i.quantity > 1 ? i.quantity + 'x ' : ''}${i.name}${i.spice_level ? ` (${i.spice_level})` : ''}${i.line_total ? ` ($${Number(i.line_total).toFixed(2)})` : ''}`).join(', ')
     : 'the requested item';
   const totalLine   = ctx.orderTotal ? ` Total: $${Number(ctx.orderTotal).toFixed(2)}.` : '';
   const unavailLine = ctx.unavailableItems?.length ? ` Unavailable: ${ctx.unavailableItems.join(', ')}.` : '';
-  const orderedDrink = (ctx.items || []).some((i) => /coke|juice|water|coffee|tea|drink/i.test(i.name));
+  const orderedDrink = (ctx.items || []).some((i) => /coke|juice|water|lassi|chai|nimbu|coffee|tea|drink/i.test(i.name));
   const upsellHint  = !orderedDrink && state.emotion !== 'frustrated' && state.emotion !== 'angry'
     ? `Suggest ${drinkHint} as an add-on.` : 'Skip upsell.';
 
-  const emoGuide  = emotionGuidance(state);
-  const urgGuide  = urgencyGuidance(state);
-  const memGuide  = memoryGuidance(memory, ctx.intent);
+  // Spice level: prompt if any ordered item supports it and spice level not yet set
+  const spiceLevels    = Array.isArray(knowledge?.spice_levels) ? knowledge.spice_levels : [];
+  const hasSpiceItem   = (ctx.items || []).some((i) => {
+    const menuEntry = menu.find((m) => m.name.toLowerCase() === (i.name || '').toLowerCase());
+    return menuEntry?.spice === true;
+  });
+  const spiceAlreadySet = (ctx.items || []).some((i) => i.spice_level);
+  const spicePrompt = hasSpiceItem && !spiceAlreadySet && spiceLevels.length
+    ? `Ask spice level: ${spiceLevels.join(', ')}.` : '';
+
+  const emoGuide = emotionGuidance(state);
+  const urgGuide = urgencyGuidance(state);
+  const memGuide = memoryGuidance(memory, ctx.intent);
 
   return `You are a warm, experienced restaurant staff member at ${venueName}.
 
 MENU: ${menuSummary}
+${comboSummary ? `COMBOS: ${comboSummary}` : ''}
+${specialsSummary ? `TODAY'S SPECIALS: ${specialsSummary}` : ''}
 ORDERED: ${itemsSummary}${totalLine}${unavailLine}
 ORDER STATUS: ${ctx.executionStatus === 'completed' ? 'Sent to kitchen' : 'Order noted'}
 
@@ -215,6 +237,7 @@ CUSTOMER STATE:
 ${memGuide ? '- Memory context: ' + memGuide : ''}
 
 UPSELL RULE: ${upsellHint}
+${spicePrompt ? `SPICE RULE: ${spicePrompt}` : ''}
 
 HARD RULES (voice-safe output):
 - MAX 3 SHORT sentences — response will be read aloud
@@ -266,11 +289,26 @@ function buildUnknownQueryPrompt(tenant, knowledge, message, state, memory) {
   const type      = tenant.type || 'restaurant';
   const menu      = Array.isArray(knowledge?.menu)     ? knowledge.menu     : [];
   const services  = Array.isArray(knowledge?.services) ? knowledge.services : [];
+  const specials  = Array.isArray(knowledge?.specials) ? knowledge.specials : [];
+  const combos    = Array.isArray(knowledge?.combos)   ? knowledge.combos   : [];
+
+  const lowerMsg = (message || '').toLowerCase();
+  const isAskingSpecials = /special|deal|offer|today|recommend|suggest|popular|what.?s good/i.test(lowerMsg);
 
   let contextSnippet = '';
-  if (type === 'restaurant' && menu.length) {
-    const top = menu.slice(0, 4).map((m) => `${m.name} ($${Number(m.price).toFixed(2)})`).join(', ');
-    contextSnippet = `Popular items: ${top}.`;
+  if (type === 'restaurant') {
+    if (isAskingSpecials && specials.length) {
+      const specialLines = specials
+        .map((s) => `${s.name}: ${s.description}${s.price ? ` ($${Number(s.price).toFixed(2)})` : ''}`)
+        .join('; ');
+      contextSnippet = `Today's specials: ${specialLines}.`;
+    } else if (combos.length) {
+      const topCombo = combos[0];
+      contextSnippet = `Featured deal: ${topCombo.name} — ${topCombo.description} ($${Number(topCombo.price).toFixed(2)}).`;
+    } else if (menu.length) {
+      const top = menu.slice(0, 4).map((m) => `${m.name} ($${Number(m.price).toFixed(2)})`).join(', ');
+      contextSnippet = `Popular items: ${top}.`;
+    }
   } else if (type === 'clinic' && services.length) {
     const top = services.slice(0, 3).map((s) => s.name).join(', ');
     contextSnippet = `Services available: ${top}.`;
@@ -289,9 +327,9 @@ Urgency: ${state.urgency}.
 The customer said: "${message}"
 
 Respond as a real staff member:
-- Daily specials/offers? Pick 1–2 items, use "today only" tone, suggest a deal
+- If asked about specials or deals: share the specials listed above with enthusiasm, don't invent others
 - How long? Give realistic time range, offer fast alternatives if urgent
-- Recommendation? Enthusiastically suggest 1–2 items
+- Recommendation? Enthusiastically suggest 1–2 items from the menu above
 - Unclear? Ask ONE short clarifying question
 - If confused: simplify to 2 choices only
 - If frustrated/angry: calm and solution-first

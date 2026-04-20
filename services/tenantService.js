@@ -84,6 +84,20 @@ const tenantStore = new Map([
       created_at: new Date().toISOString(),
     },
   ],
+  [
+    'tenant_bhagibhavan',
+    {
+      id: 'tenant_bhagibhavan',
+      name: 'Bhagibhavan',
+      type: 'restaurant',
+      plan: 'restaurant',
+      price: 199,
+      usage_limit: { ai_requests_monthly: 5000, executions_monthly: 2000 },
+      business_hours: null,
+      api_key: 'bhagibhavan-api-key',
+      created_at: new Date().toISOString(),
+    },
+  ],
 ]);
 
 function createServiceError(message, statusCode = 500) {
