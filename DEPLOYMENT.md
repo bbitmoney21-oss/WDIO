@@ -40,8 +40,8 @@ Do not commit real values.
 
 Recommended:
 
-- Main site: `https://yourdomain.com`
-- API: `https://api.yourdomain.com`
+- Main site: `https://canadataxpro.me`
+- API: `https://api.canadataxpro.me`
 
 DNS on Hostinger:
 
@@ -52,20 +52,20 @@ DNS on Hostinger:
 Then in Render:
 
 1. Open your service settings.
-2. Add custom domain: `api.yourdomain.com`
+2. Add custom domain: `api.canadataxpro.me`
 3. Wait for Render SSL provisioning.
 
 Set:
 
-- `BOOKING_AGENT_API_URL=https://api.yourdomain.com`
-- `CORS_ORIGIN=https://yourdomain.com`
+- `BOOKING_AGENT_API_URL=https://api.canadataxpro.me`
+- `CORS_ORIGIN=https://canadataxpro.me`
 
 ### Option B: Full app on main domain
 
 If you want backend and landing page under one host:
 
-- Add `CNAME` or `A record` from `yourdomain.com` / `www` to the Render target per Render instructions.
-- Add custom domains in Render for both `yourdomain.com` and `www.yourdomain.com`.
+- Add `CNAME` or `A record` from `canadataxpro.me` / `www` to the Render target per Render instructions.
+- Add custom domains in Render for both `canadataxpro.me` and `www.canadataxpro.me`.
 
 ## Landing page deployment
 
@@ -76,7 +76,8 @@ Upload `index.html` to Hostinger public web root.
 Use:
 
 - Main marketing site on `https://yourdomain.com`
-- Backend API on `https://api.yourdomain.com`
+- Main marketing site on `https://canadataxpro.me`
+- Backend API on `https://api.canadataxpro.me`
 
 ### Render-only hosting
 
@@ -97,7 +98,7 @@ await bookOrOrder(
   },
   {
     apiKey: "tenant_api_key",
-    backendUrl: "https://api.yourdomain.com",
+    backendUrl: "https://api.canadataxpro.me",
   }
 );
 ```
@@ -106,8 +107,8 @@ await bookOrOrder(
 
 After deployment confirm:
 
-1. `https://api.yourdomain.com/health` returns JSON
-2. `POST https://api.yourdomain.com/api/agent/handle` returns structured JSON
+1. `https://api.canadataxpro.me/health` returns JSON
+2. `POST https://api.canadataxpro.me/api/agent/handle` returns structured JSON
 3. Invalid or missing API key returns:
    - `{ "error": "Unauthorized tenant" }`
 4. Main site loads over HTTPS

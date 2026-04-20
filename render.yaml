@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: universal-booking-ai-agent
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: CORS_ORIGIN
+        value: https://canadataxpro.me
+      - key: CLINIC_ADMIN_EMAIL
+        sync: false
+      - key: BOOKING_AGENT_API_URL
+        value: https://api.canadataxpro.me
