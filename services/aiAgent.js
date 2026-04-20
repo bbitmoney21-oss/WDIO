@@ -442,7 +442,7 @@ async function extractClinicBooking(message, userId, promptOverride = null) {
 }
 
 function buildUnknownResponse() {
-  return 'I can help with restaurant orders or clinic appointments. Could you tell me which one you need?';
+  return 'Hey! Happy to help — are you looking to place a food order or book an appointment? Just let me know!';
 }
 
 function buildRestaurantResponse(result) {

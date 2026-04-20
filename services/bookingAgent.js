@@ -1,5 +1,4 @@
 const {
-  buildUnknownResponse,
   classifyIntent,
   createServiceError,
   extractClinicBooking,
@@ -30,12 +29,17 @@ const {
   validateAndPriceItems,
   normaliseClinicService,
 } = require('./knowledgeService');
+const {
+  generateStaffResponse,
+  recordOrder,
+  recordBooking,
+} = require('./staffBehavior');
 
-// ─── Response builder ────────────────────────────────────────────────────────
+// ─── Response builder ─────────────────────────────────────────────────────────
 
 function buildResponse({ intent, executionStatus, id = null, response, data = {}, tenant, hoursInfo, statusOverride }) {
   const planConfig = getPlanConfig(tenant.plan);
-  const status = statusOverride || (hoursInfo ? (hoursInfo.open ? 'open' : 'closed') : 'open');
+  const status     = statusOverride || (hoursInfo ? (hoursInfo.open ? 'open' : 'closed') : 'open');
 
   return {
     intent,
@@ -44,9 +48,9 @@ function buildResponse({ intent, executionStatus, id = null, response, data = {}
     response,
     status,
     business_hours: hoursInfo ? hoursInfo.display : null,
-    timezone: hoursInfo ? hoursInfo.timezone : null,
-    plan: tenant.plan,
-    monthly_price: planConfig.monthly_price ?? null,
+    timezone:       hoursInfo ? hoursInfo.timezone : null,
+    plan:           tenant.plan,
+    monthly_price:  planConfig.monthly_price ?? null,
     data,
   };
 }
@@ -55,11 +59,11 @@ function getClinicAdminEmail() {
   return process.env.CLINIC_ADMIN_EMAIL || 'clinic-admin@example.com';
 }
 
-// ─── Plan enforcement ────────────────────────────────────────────────────────
+// ─── Plan enforcement ─────────────────────────────────────────────────────────
 
 function assertPlanAllowsIntent(tenant, intent) {
   const planConfig = getPlanConfig(tenant.plan);
-  const allowed = planConfig.allowed_intents || [];
+  const allowed    = planConfig.allowed_intents || [];
   if (intent === 'unknown') return;
 
   if (!allowed.includes(intent)) {
@@ -74,57 +78,57 @@ function assertPlanAllowsIntent(tenant, intent) {
   }
 }
 
-// ─── Execution flows ─────────────────────────────────────────────────────────
+// ─── Execution flows ──────────────────────────────────────────────────────────
 
 async function executeRestaurantFlow({ tenant, userId, message, hoursInfo }) {
-  // Phase 3: fetch knowledge and build a menu-aware system prompt
-  const knowledge   = await getTenantKnowledge(tenant.id, tenant.type).catch(() => null);
+  const knowledge      = await getTenantKnowledge(tenant.id, tenant.type).catch(() => null);
   const promptOverride = knowledge ? buildRestaurantSystemPrompt(knowledge) : null;
 
   const extraction = await extractRestaurantOrder(message, promptOverride);
 
-  // Phase 4: validate extracted items against the menu; calculate totals
   const { validItems, unavailableItems, total, menuConfigured } =
     validateAndPriceItems(extraction.items, knowledge);
 
-  // Phase 6: all items unavailable — return menu-aware "not available" response
+  // All requested items unavailable — human-like response via staffBehavior
   if (menuConfigured && validItems.length === 0 && unavailableItems.length > 0) {
-    const menuList = Array.isArray(knowledge.menu)
-      ? knowledge.menu.slice(0, 6).map((m) => m.name).join(', ')
-      : '';
     const planConfig = getPlanConfig(tenant.plan);
+    const staffMsg   = await generateStaffResponse({
+      intent:           'item_unavailable',
+      tenant,
+      knowledge,
+      message,
+      userId,
+      items:            [],
+      unavailableItems,
+      executionStatus:  'item_unavailable',
+    }).catch(() => `Sorry, ${unavailableItems.join(', ')} isn't available right now. What else can I get you?`);
+
     return {
-      intent: 'restaurant_order',
+      intent:          'restaurant_order',
       execution_status: 'item_unavailable',
-      id: null,
-      status: 'open',
-      business_hours: hoursInfo ? hoursInfo.display : null,
-      timezone: hoursInfo ? hoursInfo.timezone : null,
-      plan: tenant.plan,
-      monthly_price: planConfig.monthly_price ?? null,
-      response: `Sorry, ${unavailableItems.join(', ')} ${unavailableItems.length === 1 ? 'is' : 'are'} not available. ${menuList ? `We serve: ${menuList}.` : 'Please check our menu.'}`,
-      data: { unavailable_items: unavailableItems, tenant_id: tenant.id, usage: buildUsageSummary(tenant) },
+      id:              null,
+      status:          'open',
+      business_hours:  hoursInfo ? hoursInfo.display : null,
+      timezone:        hoursInfo ? hoursInfo.timezone : null,
+      plan:            tenant.plan,
+      monthly_price:   planConfig.monthly_price ?? null,
+      response:        staffMsg,
+      data:            { unavailable_items: unavailableItems, tenant_id: tenant.id, usage: buildUsageSummary(tenant) },
     };
   }
 
   const itemsToOrder = validItems.length > 0 ? validItems : extraction.items;
 
-  const orderResult = await createRestaurantOrder({
-    tenant,
-    userId,
-    items: itemsToOrder,
-    rawMessage: message,
-  });
-  const planConfig = getPlanConfig(tenant.plan);
+  const orderResult = await createRestaurantOrder({ tenant, userId, items: itemsToOrder, rawMessage: message });
+  const planConfig  = getPlanConfig(tenant.plan);
 
   let printerResult = { status: 'skipped', provider: 'mock-kitchen-printer' };
-
   if (planConfig.integrationsEnabled) {
     try {
       printerResult = await sendToKitchenPrinter({
-        order_id: orderResult.order_id,
-        items: itemsToOrder,
-        time: new Date().toISOString(),
+        order_id:     orderResult.order_id,
+        items:        itemsToOrder,
+        time:         new Date().toISOString(),
         instructions: message,
       });
     } catch (err) {
@@ -132,32 +136,40 @@ async function executeRestaurantFlow({ tenant, userId, message, hoursInfo }) {
     }
   }
 
-  const usage = incrementExecutionUsage(tenant, 'restaurant_order');
+  const execStatus = printerResult.status === 'queued' ? 'completed' : 'partial';
+  const usage      = incrementExecutionUsage(tenant, 'restaurant_order');
 
-  // Build a rich response that includes pricing when menu is configured
-  const unavailableNote = unavailableItems.length > 0
-    ? ` (Note: ${unavailableItems.join(', ')} not available and was excluded.)`
-    : '';
+  // Phase 1–8: human-like response with upsell, emotion awareness, memory
+  const staffMsg = await generateStaffResponse({
+    intent:          'restaurant_order',
+    tenant,
+    knowledge,
+    message,
+    userId,
+    items:           itemsToOrder,
+    orderTotal:      total,
+    unavailableItems,
+    executionStatus: execStatus,
+  }).catch(() => `Got it! Your order is in. Should be ready in about 20–25 minutes.`);
 
-  const baseResponse = planConfig.integrationsEnabled
-    ? 'Order received and sent to kitchen printer'
-    : 'Order received. Upgrade your plan to enable kitchen printer execution.';
+  // Phase 3: record in memory for future personalisation
+  recordOrder(tenant.id, userId, itemsToOrder, total);
 
   return buildResponse({
-    intent: 'restaurant_order',
-    executionStatus: printerResult.status === 'queued' ? 'completed' : 'partial',
-    id: orderResult.order_id,
-    response: `${baseResponse}${unavailableNote}`,
+    intent:          'restaurant_order',
+    executionStatus: execStatus,
+    id:              orderResult.order_id,
+    response:        staffMsg,
     data: {
-      order_id: orderResult.order_id,
-      details: orderResult.details,
-      items: itemsToOrder,
-      order_total: total !== null ? total : undefined,
+      order_id:         orderResult.order_id,
+      details:          orderResult.details,
+      items:            itemsToOrder,
+      order_total:      total !== null ? total : undefined,
       unavailable_items: unavailableItems.length > 0 ? unavailableItems : undefined,
-      printer: printerResult,
-      stored: orderResult.stored,
-      tenant_id: tenant.id,
-      usage: buildUsageSummary(tenant),
+      printer:          printerResult,
+      stored:           orderResult.stored,
+      tenant_id:        tenant.id,
+      usage:            buildUsageSummary(tenant),
       current_usage_snapshot: usage,
     },
     tenant,
@@ -167,25 +179,22 @@ async function executeRestaurantFlow({ tenant, userId, message, hoursInfo }) {
 }
 
 async function executeClinicFlow({ tenant, userId, message, hoursInfo }) {
-  // Phase 3 & 5: fetch knowledge and inject service catalog into prompt
   const knowledge      = await getTenantKnowledge(tenant.id, tenant.type).catch(() => null);
   const promptOverride = knowledge ? buildClinicSystemPrompt(knowledge) : null;
 
-  const extraction = await extractClinicBooking(message, userId, promptOverride);
-
-  // Phase 5: normalise service type against known services
+  const extraction        = await extractClinicBooking(message, userId, promptOverride);
   const normalisedService = normaliseClinicService(extraction.service_type, knowledge);
 
   const appointmentResult = await createClinicAppointment({
     tenant,
     userId,
-    patientName: extraction.patient_name,
-    serviceType: normalisedService,
+    patientName:    extraction.patient_name,
+    serviceType:    normalisedService,
     timePreference: extraction.time_preference,
-    rawMessage: message,
+    rawMessage:     message,
   });
 
-  let calendarResult  = { status: 'skipped', provider: 'mock-google-calendar' };
+  let calendarResult     = { status: 'skipped', provider: 'mock-google-calendar' };
   let patientEmailResult = { status: 'skipped', provider: 'mock-email-service' };
   let adminEmailResult   = { status: 'skipped', provider: 'mock-email-service' };
 
@@ -194,17 +203,15 @@ async function executeClinicFlow({ tenant, userId, message, hoursInfo }) {
   if (planConfig.integrationsEnabled) {
     try {
       calendarResult = await createCalendarEvent({
-        appointment_id: appointmentResult.appointment_id,
-        patient_name:   extraction.patient_name,
-        service_type:   extraction.service_type,
+        appointment_id:  appointmentResult.appointment_id,
+        patient_name:    extraction.patient_name,
+        service_type:    extraction.service_type,
         time_preference: extraction.time_preference,
         attendees: extraction.patient_email
           ? [{ email: extraction.patient_email }, { email: getClinicAdminEmail() }]
           : [{ email: getClinicAdminEmail() }],
       });
-    } catch (err) {
-      console.error('Calendar execution failed:', err.message);
-    }
+    } catch (err) { console.error('Calendar execution failed:', err.message); }
   }
 
   const emailBody = [
@@ -227,34 +234,47 @@ async function executeClinicFlow({ tenant, userId, message, hoursInfo }) {
         `New clinic booking ${appointmentResult.appointment_id}`,
         emailBody,
       );
-    } catch (err) {
-      console.error('Email execution failed:', err.message);
-    }
+    } catch (err) { console.error('Email execution failed:', err.message); }
   }
+
+  const execStatus =
+    calendarResult.status === 'created' &&
+    (patientEmailResult.status === 'queued' || patientEmailResult.status === 'skipped') &&
+    adminEmailResult.status === 'queued'
+      ? 'completed' : 'partial';
 
   const usage = incrementExecutionUsage(tenant, 'clinic_booking');
 
+  // Human receptionist response with emotion + memory awareness
+  const staffMsg = await generateStaffResponse({
+    intent:         'clinic_booking',
+    tenant,
+    knowledge,
+    message,
+    userId,
+    patientName:    extraction.patient_name,
+    serviceType:    normalisedService,
+    timePreference: extraction.time_preference,
+    executionStatus: execStatus,
+  }).catch(() => `I've booked your ${normalisedService}. Please arrive 10 minutes early. Anything else?`);
+
+  // Phase 3: record booking in memory
+  recordBooking(tenant.id, userId, normalisedService, extraction.time_preference);
+
   return buildResponse({
-    intent: 'clinic_booking',
-    executionStatus:
-      calendarResult.status === 'created' &&
-      (patientEmailResult.status === 'queued' || patientEmailResult.status === 'skipped') &&
-      adminEmailResult.status === 'queued'
-        ? 'completed'
-        : 'partial',
-    id: appointmentResult.appointment_id,
-    response: planConfig.integrationsEnabled
-      ? 'Appointment booked and confirmation sent via email'
-      : 'Appointment booked. Upgrade your plan to enable email and calendar confirmations.',
+    intent:          'clinic_booking',
+    executionStatus: execStatus,
+    id:              appointmentResult.appointment_id,
+    response:        staffMsg,
     data: {
       appointment_id: appointmentResult.appointment_id,
       service_type:   normalisedService,
-      details: appointmentResult.details,
-      calendar: calendarResult,
-      email: { patient: patientEmailResult, admin: adminEmailResult },
-      stored: appointmentResult.stored,
-      tenant_id: tenant.id,
-      usage: buildUsageSummary(tenant),
+      details:        appointmentResult.details,
+      calendar:       calendarResult,
+      email:          { patient: patientEmailResult, admin: adminEmailResult },
+      stored:         appointmentResult.stored,
+      tenant_id:      tenant.id,
+      usage:          buildUsageSummary(tenant),
       current_usage_snapshot: usage,
     },
     tenant,
@@ -263,42 +283,40 @@ async function executeClinicFlow({ tenant, userId, message, hoursInfo }) {
   });
 }
 
-// ─── After-hours / scheduling response builders ───────────────────────────────
+// ─── After-hours / scheduling responses ──────────────────────────────────────
 
 function buildClosedResponse(tenant, intent, hoursInfo, isScheduled) {
   const planConfig = getPlanConfig(tenant.plan);
 
   if (isScheduled) {
-    const scheduleMsg =
-      intent === 'restaurant_order' || tenant.type === 'restaurant'
-        ? 'Your order has been noted and will be processed when we open tomorrow.'
-        : 'Your appointment request has been noted. We will confirm your slot when we open.';
-
+    const msg = tenant.type === 'restaurant'
+      ? 'Sure! I\'ve noted your order and we\'ll process it as soon as we open tomorrow.'
+      : 'Got it! I\'ve noted your request and we\'ll confirm your slot first thing when we open.';
     return {
-      intent: intent || 'unknown',
+      intent:          intent || 'unknown',
       execution_status: 'pending',
-      id: null,
-      status: 'scheduled',
-      business_hours: hoursInfo.display,
-      timezone: hoursInfo.timezone,
-      plan: tenant.plan,
-      monthly_price: planConfig.monthly_price ?? null,
-      response: scheduleMsg,
-      data: { tenant_id: tenant.id, scheduled: true },
+      id:              null,
+      status:          'scheduled',
+      business_hours:  hoursInfo.display,
+      timezone:        hoursInfo.timezone,
+      plan:            tenant.plan,
+      monthly_price:   planConfig.monthly_price ?? null,
+      response:        msg,
+      data:            { tenant_id: tenant.id, scheduled: true },
     };
   }
 
   return {
-    intent: intent || 'unknown',
+    intent:          intent || 'unknown',
     execution_status: 'closed',
-    id: null,
-    status: 'closed',
-    business_hours: hoursInfo.display,
-    timezone: hoursInfo.timezone,
-    plan: tenant.plan,
-    monthly_price: planConfig.monthly_price ?? null,
-    response: getAfterHoursResponse(tenant, intent, hoursInfo),
-    data: { tenant_id: tenant.id },
+    id:              null,
+    status:          'closed',
+    business_hours:  hoursInfo.display,
+    timezone:        hoursInfo.timezone,
+    plan:            tenant.plan,
+    monthly_price:   planConfig.monthly_price ?? null,
+    response:        getAfterHoursResponse(tenant, intent, hoursInfo),
+    data:            { tenant_id: tenant.id },
   };
 }
 
@@ -319,26 +337,18 @@ async function handleAgentRequest({ tenant, userId, message, mode = 'auto' }) {
     throw createServiceError('`mode` must be one of: auto, restaurant, clinic.', 400);
   }
 
-  // ── Business hours check (Phase 2) ──────────────────────────────────────────
   const hoursInfo = isWithinBusinessHours(tenant);
 
   if (!hoursInfo.open) {
-    // Phase 4: detect scheduling intent before hard-blocking
     const wantsToSchedule = detectSchedulingIntent(normalizedMessage);
-
-    // Classify intent even when closed so we can give smart messages
     const intent = await classifyIntent(normalizedMessage, normalizedMode).catch(() => 'unknown');
-
     return buildClosedResponse(tenant, intent, hoursInfo, wantsToSchedule);
   }
 
-  // ── Normal open-hours flow ───────────────────────────────────────────────────
   assertWithinPlanLimits(tenant);
   incrementAiUsage(tenant);
 
   const intent = await classifyIntent(normalizedMessage, normalizedMode);
-
-  // Phase 7: enforce plan-based feature access
   assertPlanAllowsIntent(tenant, intent);
 
   if (intent === 'restaurant_order') {
@@ -349,21 +359,30 @@ async function handleAgentRequest({ tenant, userId, message, mode = 'auto' }) {
     return executeClinicFlow({ tenant, userId: normalizedUserId, message: normalizedMessage, hoursInfo });
   }
 
+  // Unknown intent — staffBehavior handles specials, timing questions, recommendations, etc.
+  const knowledge  = await getTenantKnowledge(tenant.id, tenant.type).catch(() => null);
   const planConfig = getPlanConfig(tenant.plan);
+
+  const staffMsg = await generateStaffResponse({
+    intent:   'unknown',
+    tenant,
+    knowledge,
+    message:  normalizedMessage,
+    userId:   normalizedUserId,
+  }).catch(() => 'Hi! I can help you place a food order or book an appointment. What can I do for you?');
+
   return {
-    intent: 'unknown',
+    intent:          'unknown',
     execution_status: 'clarification_required',
-    id: null,
-    status: 'open',
-    business_hours: hoursInfo.display,
-    timezone: hoursInfo.timezone,
-    plan: tenant.plan,
-    monthly_price: planConfig.monthly_price ?? null,
-    response: buildUnknownResponse(),
-    data: { tenant_id: tenant.id, usage: buildUsageSummary(tenant) },
+    id:              null,
+    status:          'open',
+    business_hours:  hoursInfo.display,
+    timezone:        hoursInfo.timezone,
+    plan:            tenant.plan,
+    monthly_price:   planConfig.monthly_price ?? null,
+    response:        staffMsg,
+    data:            { tenant_id: tenant.id, usage: buildUsageSummary(tenant) },
   };
 }
 
-module.exports = {
-  handleAgentRequest,
-};
+module.exports = { handleAgentRequest };
