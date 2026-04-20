@@ -115,37 +115,47 @@ function toSpeech(text) {
     .trim();
 }
 
-// ─── Route: incoming call (Phase 2 & 3) ─────────────────────────────────────
+// ─── Route: incoming call ─────────────────────────────────────────────────────
 
 router.post('/incoming', twilioAuth, (req, res) => {
-  const tenant = resolveVoiceTenant();
+  const callSid = req.body?.CallSid || 'unknown';
+  console.log('[voice] incoming call callSid=%s', callSid);
 
-  if (!tenant) {
+  try {
+    const tenant = resolveVoiceTenant();
+
+    if (!tenant) {
+      return sendTwiML(res,
+        say('This service is not yet configured. Please contact support.') +
+        '<Hangup/>',
+      );
+    }
+
+    const hoursInfo = isWithinBusinessHours(tenant);
+    if (!hoursInfo.open) {
+      const closedMsg = getAfterHoursResponse(tenant, null, hoursInfo);
+      return sendTwiML(res, say(closedMsg) + '<Hangup/>');
+    }
+
     return sendTwiML(res,
-      say('This service is not yet configured. Please contact support.') +
+      say('Welcome to A.I. assistant. How can I help you today?') +
+      gather(),
+    );
+  } catch (err) {
+    console.error('[voice] /incoming error callSid=%s:', callSid, err.message);
+    return sendTwiML(res,
+      say('Sorry, we are experiencing technical issues. Please try again shortly.') +
       '<Hangup/>',
     );
   }
-
-  // Phase 7: enforce business hours before greeting
-  const hoursInfo = isWithinBusinessHours(tenant);
-  if (!hoursInfo.open) {
-    const closedMsg = getAfterHoursResponse(tenant, null, hoursInfo);
-    return sendTwiML(res, say(closedMsg) + '<Hangup/>');
-  }
-
-  // Phase 3: greet caller and start listening
-  return sendTwiML(res,
-    say('Welcome to A.I. assistant. How can I help you today?') +
-    gather(),
-  );
 });
 
-// ─── Route: speech received (Phases 4, 5, 6) ────────────────────────────────
+// ─── Route: speech received ───────────────────────────────────────────────────
 
 router.post('/gather', twilioAuth, async (req, res) => {
   const speechResult = (req.body?.SpeechResult || '').trim();
   const callSid      = req.body?.CallSid || 'voice-caller';
+  console.log('[voice] gather callSid=%s speech=%s', callSid, speechResult || '(empty)');
   const tenant       = resolveVoiceTenant();
 
   if (!tenant) {
@@ -214,6 +224,26 @@ router.post('/gather', twilioAuth, async (req, res) => {
       gather(),
     );
   }
+});
+
+// ─── Route: voice fallback (Twilio calls this when /incoming or /gather fail) ─
+// Must NEVER reference SMS routes — voice failures stay in voice channel only.
+
+router.post('/fallback', twilioAuth, (req, res) => {
+  const callSid = req.body?.CallSid || 'unknown';
+  console.error('[voice] fallback triggered callSid=%s', callSid);
+  return sendTwiML(res,
+    say('Sorry, we are experiencing technical issues. Please call back shortly.') +
+    '<Hangup/>',
+  );
+});
+
+// ─── Route: call status callback (Twilio posts async, no TwiML needed) ────────
+
+router.post('/status', (req, res) => {
+  const { CallSid, CallStatus, CallDuration } = req.body || {};
+  console.log('[voice] status callSid=%s status=%s duration=%s', CallSid, CallStatus, CallDuration);
+  return res.sendStatus(204);
 });
 
 module.exports = router;

@@ -13,6 +13,7 @@ const { authenticateTenant } = require('./middleware/authenticateTenant');
 const supportRouter = require('./routes/support');
 const leadRouter = require('./routes/lead');
 const voiceRouter = require('./routes/voice');
+const smsRouter = require('./routes/sms');
 const { hasOpenAiConfig } = require('./services/aiAgent');
 const { hasSupabaseConfig } = require('./services/supabaseClient');
 
@@ -57,12 +58,29 @@ app.use('/onboarding', onboardingRouter);
 app.use('/api/support', supportRouter);
 app.use('/api/lead', leadRouter);
 app.use('/api/voice', voiceRouter);
+app.use('/api/sms', smsRouter);
 
 app.use((err, _req, res, _next) => {
   const statusCode = err.statusCode || 500;
 
   if (statusCode >= 500) {
     console.error(err);
+  }
+
+  // Twilio voice webhooks must receive TwiML, never JSON
+  if (_req.path.startsWith('/api/voice/')) {
+    res.setHeader('Content-Type', 'text/xml; charset=utf-8');
+    return res.status(200).send(
+      '<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, we are experiencing technical issues. Please try again shortly.</Say><Hangup/></Response>',
+    );
+  }
+
+  // Twilio SMS webhooks must receive TwiML <Message>, never JSON
+  if (_req.path.startsWith('/api/sms/')) {
+    res.setHeader('Content-Type', 'text/xml; charset=utf-8');
+    return res.status(200).send(
+      '<?xml version="1.0" encoding="UTF-8"?><Response><Message>Sorry, we encountered an issue. Please try again shortly.</Message></Response>',
+    );
   }
 
   if (_req.path === '/api/agent/handle') {
@@ -99,6 +117,10 @@ if (require.main === module) {
 
   if (!hasSupabaseConfig()) {
     console.error('Warning: Supabase is not fully configured. Requests will be captured in fallback draft mode instead of persistent storage.');
+  }
+
+  if (!process.env.TWILIO_EMERGENCY_ADDRESS_SID) {
+    console.warn('WARNING: Emergency address not configured. Set TWILIO_EMERGENCY_ADDRESS_SID to comply with Twilio voice regulations.');
   }
 
   app.listen(port, () => {
