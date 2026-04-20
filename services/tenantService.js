@@ -192,6 +192,7 @@ module.exports = {
   defaultPlanForType,
   getPlanConfig,
   getTenantById,
+  getTenantByApiKey,
   listTenants,
   resolveTenant,
   upgradeTenantPlan,

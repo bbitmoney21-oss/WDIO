@@ -12,6 +12,7 @@ const webRouter = require('./routes/web');
 const { authenticateTenant } = require('./middleware/authenticateTenant');
 const supportRouter = require('./routes/support');
 const leadRouter = require('./routes/lead');
+const voiceRouter = require('./routes/voice');
 const { hasOpenAiConfig } = require('./services/aiAgent');
 const { hasSupabaseConfig } = require('./services/supabaseClient');
 
@@ -32,6 +33,8 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+// Twilio webhooks are sent as application/x-www-form-urlencoded
+app.use(express.urlencoded({ extended: false }));
 
 app.use('/', webRouter);
 
@@ -53,6 +56,7 @@ app.use('/dashboard', authenticateTenant, dashboardRouter);
 app.use('/onboarding', onboardingRouter);
 app.use('/api/support', supportRouter);
 app.use('/api/lead', leadRouter);
+app.use('/api/voice', voiceRouter);
 
 app.use((err, _req, res, _next) => {
   const statusCode = err.statusCode || 500;
