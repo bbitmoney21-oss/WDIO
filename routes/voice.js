@@ -10,8 +10,14 @@ const router = express.Router();
 // We build TwiML as plain XML strings — no twilio npm package required.
 
 const XML_HEADER = '<?xml version="1.0" encoding="UTF-8"?>';
-const GATHER_ACTION = '/api/voice/gather';
 const TTS_VOICE = 'alice'; // Twilio built-in neural TTS voice
+
+// Twilio requires fully-qualified HTTPS URLs in TwiML action attributes.
+// Relative paths cause "application error occurred" after the initial greeting.
+function gatherActionUrl() {
+  const base = (process.env.PUBLIC_URL || 'https://universal-booking-ai-agent.onrender.com').replace(/\/$/, '');
+  return `${base}/api/voice/gather`;
+}
 
 function xmlEscape(text) {
   return String(text || '')
@@ -27,9 +33,11 @@ function say(text) {
 }
 
 // Wraps optional inner content in a <Gather> block that captures speech.
-function gather({ action = GATHER_ACTION, prompt = null, timeout = 3 } = {}) {
+// action always defaults to the absolute URL derived from PUBLIC_URL.
+function gather({ action = null, prompt = null, timeout = 3 } = {}) {
+  const resolvedAction = action || gatherActionUrl();
   const inner = prompt ? say(prompt) : '';
-  return `<Gather input="speech" action="${action}" method="POST" speechTimeout="${timeout}" language="en-US">${inner}</Gather>`;
+  return `<Gather input="speech" action="${resolvedAction}" method="POST" speechTimeout="${timeout}" language="en-US">${inner}</Gather>`;
 }
 
 function twiml(body) {
