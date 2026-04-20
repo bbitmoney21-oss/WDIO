@@ -10,13 +10,18 @@ const router = express.Router();
 // We build TwiML as plain XML strings — no twilio npm package required.
 
 const XML_HEADER = '<?xml version="1.0" encoding="UTF-8"?>';
-const TTS_VOICE = 'alice'; // Twilio built-in neural TTS voice
 
 // Twilio requires fully-qualified HTTPS URLs in TwiML action attributes.
 // Relative paths cause "application error occurred" after the initial greeting.
 function gatherActionUrl() {
   const base = (process.env.PUBLIC_URL || 'https://universal-booking-ai-agent.onrender.com').replace(/\/$/, '');
   return `${base}/api/voice/gather`;
+}
+
+// Voice selection: default to Polly.Aditi (Indian English, neural, natural for Bhagibhavan).
+// Override via VOICE_TTS_VOICE env var if needed (e.g. "Polly.Raveena", "alice").
+function getTtsVoice() {
+  return process.env.VOICE_TTS_VOICE || 'Polly.Aditi';
 }
 
 function xmlEscape(text) {
@@ -29,7 +34,7 @@ function xmlEscape(text) {
 }
 
 function say(text) {
-  return `<Say voice="${TTS_VOICE}">${xmlEscape(text)}</Say>`;
+  return `<Say voice="${getTtsVoice()}">${xmlEscape(text)}</Say>`;
 }
 
 // Wraps optional inner content in a <Gather> block that captures speech.
@@ -101,10 +106,11 @@ function resolveVoiceTenant() {
     if (t) return t;
   }
 
-  // Fall back to demo tenant
-  const demoType = (process.env.VOICE_DEMO_TYPE || 'restaurant').toLowerCase();
-  const demoId   = demoType === 'clinic' ? 'tenant_clinic_demo' : 'tenant_resto_demo';
-  return getTenantById(demoId);
+  // Default to Bhagibhavan; set VOICE_DEMO_TYPE=clinic to override for clinic demos
+  const demoType = (process.env.VOICE_DEMO_TYPE || '').toLowerCase();
+  if (demoType === 'clinic') return getTenantById('tenant_clinic_demo');
+  if (demoType === 'demo')   return getTenantById('tenant_resto_demo');
+  return getTenantById('tenant_bhagibhavan');
 }
 
 // ─── Strip AI response for clean TTS output ──────────────────────────────────
@@ -145,8 +151,9 @@ router.post('/incoming', twilioAuth, (req, res) => {
       return sendTwiML(res, say(closedMsg) + '<Hangup/>');
     }
 
+    const venueName = tenant.name || 'Bhagibhavan';
     return sendTwiML(res,
-      say('Welcome to A.I. assistant. How can I help you today?') +
+      say(`Thank you for calling ${venueName}! What can I get for you today?`) +
       gather(),
     );
   } catch (err) {
@@ -170,10 +177,9 @@ router.post('/gather', twilioAuth, async (req, res) => {
     return sendTwiML(res, say('Service not configured. Goodbye.') + '<Hangup/>');
   }
 
-  // Phase 8: no speech detected → politely retry
   if (!speechResult) {
     return sendTwiML(res,
-      say("Sorry, I didn't catch that. Could you please repeat?") +
+      say("Sorry, I didn't catch that — what would you like to order?") +
       gather(),
     );
   }
@@ -196,7 +202,7 @@ router.post('/gather', twilioAuth, async (req, res) => {
     if (result.status === 'scheduled') {
       return sendTwiML(res,
         say(toSpeech(result.response)) +
-        gather({ prompt: 'Anything else I can help you with?' }),
+        gather({ prompt: 'Can I get you anything else?' }),
       );
     }
 
@@ -204,7 +210,7 @@ router.post('/gather', twilioAuth, async (req, res) => {
     const spokenResponse = toSpeech(result.response);
     return sendTwiML(res,
       say(spokenResponse) +
-      gather({ prompt: 'Anything else I can help you with?' }),
+      gather({ prompt: 'Can I get you anything else?' }),
     );
 
   } catch (err) {
@@ -226,9 +232,8 @@ router.post('/gather', twilioAuth, async (req, res) => {
       );
     }
 
-    // Phase 8: generic fallback — never crash the call
     return sendTwiML(res,
-      say("Sorry, I ran into an issue processing your request. Could you please repeat?") +
+      say("Sorry about that — could you say that again?") +
       gather(),
     );
   }
