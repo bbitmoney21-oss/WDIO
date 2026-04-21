@@ -12,10 +12,11 @@ const webRouter = require('./routes/web');
 const { authenticateTenant } = require('./middleware/authenticateTenant');
 const supportRouter = require('./routes/support');
 const leadRouter = require('./routes/lead');
-const voiceRouter = require('./routes/voice');
 const smsRouter = require('./routes/sms');
+const retellWebhookRouter = require('./routes/retellWebhook');
 const { hasOpenAiConfig } = require('./services/aiAgent');
 const { hasSupabaseConfig } = require('./services/supabaseClient');
+const { hasRetellConfig } = require('./services/retellService');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -34,7 +35,7 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
-// Twilio webhooks are sent as application/x-www-form-urlencoded
+// Twilio SMS webhooks are sent as application/x-www-form-urlencoded
 app.use(express.urlencoded({ extended: false }));
 
 app.use('/', webRouter);
@@ -57,22 +58,15 @@ app.use('/dashboard', authenticateTenant, dashboardRouter);
 app.use('/onboarding', onboardingRouter);
 app.use('/api/support', supportRouter);
 app.use('/api/lead', leadRouter);
-app.use('/api/voice', voiceRouter);
 app.use('/api/sms', smsRouter);
+// Retell AI voice webhook — handles call events and function calls
+app.use('/retell-webhook', retellWebhookRouter);
 
 app.use((err, _req, res, _next) => {
   const statusCode = err.statusCode || 500;
 
   if (statusCode >= 500) {
     console.error(err);
-  }
-
-  // Twilio voice webhooks must receive TwiML, never JSON
-  if (_req.path.startsWith('/api/voice/')) {
-    res.setHeader('Content-Type', 'text/xml; charset=utf-8');
-    return res.status(200).send(
-      '<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, we are experiencing technical issues. Please try again shortly.</Say><Hangup/></Response>',
-    );
   }
 
   // Twilio SMS webhooks must receive TwiML <Message>, never JSON
@@ -119,8 +113,8 @@ if (require.main === module) {
     console.error('Warning: Supabase is not fully configured. Requests will be captured in fallback draft mode instead of persistent storage.');
   }
 
-  if (!process.env.TWILIO_EMERGENCY_ADDRESS_SID) {
-    console.warn('WARNING: Emergency address not configured. Set TWILIO_EMERGENCY_ADDRESS_SID to comply with Twilio voice regulations.');
+  if (!hasRetellConfig()) {
+    console.warn('WARNING: RETELL_API_KEY is not configured. Voice calls via Retell AI will not work.');
   }
 
   app.listen(port, () => {
